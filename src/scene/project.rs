@@ -682,6 +682,7 @@ impl Scene {
                             false,
                         );
                         wire.effective_layer = hatch.effective_layer.clone();
+                        wire.effective_plot_style = hatch.effective_plot_style.clone();
                         wire.aci = hatch.aci;
                         wire.line_weight_px = hatch.line_weight_px;
                         wire.aabb = aabb;

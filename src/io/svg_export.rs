@@ -1571,6 +1571,7 @@ mod tests {
         let mut tagged = HatchModel {
             entity: None,
             effective_layer: None,
+            effective_plot_style: None,
             pattern_origin: None,
             render_instance: None,
             world_origin: [0.0, 0.0],
@@ -1658,6 +1659,7 @@ mod tests {
         let hatch = |pattern, color| HatchModel {
             entity: None,
             effective_layer: None,
+            effective_plot_style: None,
             pattern_origin: None,
             render_instance: None,
             world_origin: [0.0, 0.0],

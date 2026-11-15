@@ -787,21 +787,32 @@ fn append_pdf_page(
                 DrawItem::Image(_) => None,
             };
             // A named (STB) table plots each entity with its own object style.
-            let item_name = match &item {
+            let item_handle = match &item {
                 DrawItem::WireFill(wire) | DrawItem::Wire(wire) | DrawItem::Text(wire) => {
-                    Some(wire.name.as_str())
+                    crate::scene::Scene::handle_from_wire_name(&wire.name)
                 }
-                DrawItem::Hatch(hatch) => Some(hatch.name.as_str()),
+                DrawItem::Hatch(hatch) => hatch
+                    .entity
+                    .or_else(|| crate::scene::Scene::handle_from_wire_name(&hatch.name)),
                 DrawItem::Image(_) => None,
             };
-            let object_style = item_name
-                .and_then(crate::scene::Scene::handle_from_wire_name)
-                .and_then(|handle| entity_plot_styles.get(&handle));
+            let occurrence_style = match &item {
+                DrawItem::WireFill(wire) | DrawItem::Wire(wire) | DrawItem::Text(wire) => {
+                    wire.effective_plot_style.as_deref()
+                }
+                DrawItem::Hatch(hatch) => hatch.effective_plot_style.as_deref(),
+                DrawItem::Image(_) => None,
+            };
+            let object_style = occurrence_style.or_else(|| {
+                item_handle
+                    .and_then(|handle| entity_plot_styles.get(&handle))
+                    .map(String::as_str)
+            });
             let plot_style = match (plot_style, object_style) {
                 (Some(table), Some(style)) if table.is_stb => {
                     if !named_styles.contains_key(style) {
                         let narrowed = crate::io::plot_style::with_object_style(table, style);
-                        named_styles.insert(style.clone(), narrowed);
+                        named_styles.insert(style.to_string(), narrowed);
                     }
                     named_styles[style].as_ref().or(Some(table))
                 }
@@ -949,8 +960,11 @@ fn append_pdf_page(
             let mut cap = None;
             let mut join = None;
             if let Some(ctb) = plot_style {
-                if wire.aci > 0 {
-                    if let Some([cr, cg, cb]) = ctb.resolve_style_color(wire.aci) {
+                if ctb.is_stb || wire.aci > 0 {
+                    if let Some([cr, cg, cb]) = ctb.resolve_object_color(
+                        wire.aci,
+                        paper_object_rgb(wire.aci, [wire.color[0], wire.color[1], wire.color[2]]),
+                    ) {
                         r = cr;
                         g = cg;
                         b = cb;
@@ -960,7 +974,7 @@ fn append_pdf_page(
                         .resolve_style_lineweight(wire.aci)
                         .map(|mm| (mm * MM_TO_PT).max(0.1));
                     screening = ctb.resolve_style_screening(wire.aci);
-                    if let Some(entry) = ctb.aci_entries.get(wire.aci as usize) {
+                    if let Some(entry) = ctb.style_entry(wire.aci) {
                         cap = match entry.end_style {
                             0 => Some(LineCapStyle::Butt),
                             1 | 3 => Some(LineCapStyle::ProjectingSquare),
@@ -980,7 +994,8 @@ fn append_pdf_page(
             // override was applied).
             // `aci == 0` is an explicit true colour and plots as drawn, like the
             // hatch pass (#1621); only a pure white there is an unresolved colour 7.
-            if !color_overridden && (wire.aci != 0 || [r, g, b] == [1.0; 3]) {
+            if !color_overridden && (wire.aci != 0 ||
+                (!plot_style.is_some_and(|table| table.is_stb) && [r, g, b] == [1.0; 3])) {
                 [r, g, b] = adapt_to_paper([r, g, b]);
             }
             [r, g, b] = plotted_color([r, g, b], a, screening, options);
@@ -1588,6 +1603,15 @@ fn plotted_color(rgb: [f32; 3], _alpha: f32, screening: f32, _options: PdfPlotOp
     ]
 }
 
+/// Indexed colours arrive adapted for the canvas; true colours retain their RGB.
+fn paper_object_rgb(aci: u8, rgb: [f32; 3]) -> [f32; 3] {
+    if aci > 0 {
+        adapt_to_paper(rgb)
+    } else {
+        rgb
+    }
+}
+
 fn emit_wire_fills(
     ops: &mut Vec<Op>,
     wires: &[WireModel],
@@ -1604,19 +1628,14 @@ fn emit_wire_fills(
             continue;
         }
         let styled_pattern = plot_style.and_then(|table| {
-            (wire.aci > 0)
-                .then(|| table.aci_entries.get(wire.aci as usize))
-                .flatten()
-                .and_then(|entry| {
-                    (65..=72)
-                        .contains(&entry.fill_style)
-                        .then(|| {
-                            crate::scene::model::hatch_model::plot_style_fill_pattern(
-                                entry.fill_style,
-                            )
-                        })
-                        .flatten()
-                })
+            table.style_entry(wire.aci).and_then(|entry| {
+                (65..=72)
+                    .contains(&entry.fill_style)
+                    .then(|| {
+                        crate::scene::model::hatch_model::plot_style_fill_pattern(entry.fill_style)
+                    })
+                    .flatten()
+            })
         });
         if let Some(pattern) = styled_pattern {
             for (triangle_index, triangle) in wire.fill_tris.chunks_exact(3).enumerate() {
@@ -1630,6 +1649,7 @@ fn emit_wire_fills(
                 let hatch = HatchModel {
                     entity: None,
                     effective_layer: wire.effective_layer.clone(),
+                    effective_plot_style: wire.effective_plot_style.clone(),
                     pattern_origin: None,
                     render_instance: wire.render_instance,
                     world_origin: [0.0, 0.0],
@@ -1682,15 +1702,17 @@ fn emit_wire_fills(
             let mut screening = 1.0;
             let mut color_overridden = false;
             if let Some(table) = plot_style {
-                if wire.aci > 0 {
-                    if let Some(color) = table.resolve_style_color(wire.aci) {
+                if table.is_stb || wire.aci > 0 {
+                    if let Some(color) =
+                        table.resolve_object_color(wire.aci, paper_object_rgb(wire.aci, [r, g, b]))
+                    {
                         [r, g, b] = color;
                         color_overridden = true;
                     }
                     screening = table.resolve_style_screening(wire.aci);
                 }
             }
-            if !color_overridden {
+            if !color_overridden && (wire.aci > 0 || !plot_style.is_some_and(|table| table.is_stb)) {
                 [r, g, b] = adapt_to_paper([r, g, b]);
             }
             [r, g, b] = plotted_color([r, g, b], a, screening, options);
@@ -1786,8 +1808,8 @@ fn emit_hatch(
     }
     let mut styled_hatch = None;
     if let Some(table) = plot_style {
-        if hatch.aci > 0 && matches!(hatch.pattern, HatchPattern::Solid) {
-            if let Some(pattern) = table.aci_entries.get(hatch.aci as usize).and_then(|entry| {
+        if hatch.name != "WIPEOUT_FILL" && matches!(hatch.pattern, HatchPattern::Solid) {
+            if let Some(pattern) = table.style_entry(hatch.aci).and_then(|entry| {
                 crate::scene::model::hatch_model::plot_style_fill_pattern(entry.fill_style)
             }) {
                 let mut model = hatch.clone();
@@ -1812,8 +1834,10 @@ fn emit_hatch(
     let mut color_overridden = false;
     if !is_wipeout {
         if let Some(table) = plot_style {
-            if hatch.aci > 0 {
-                if let Some([cr, cg, cb]) = table.resolve_style_color(hatch.aci) {
+            if table.is_stb || hatch.aci > 0 {
+                if let Some([cr, cg, cb]) =
+                    table.resolve_object_color(hatch.aci, paper_object_rgb(hatch.aci, [r, g, b]))
+                {
                     r = cr;
                     g = cg;
                     b = cb;
@@ -2081,11 +2105,9 @@ fn emit_searchable_text(
         if wire.searchable_text.is_empty() {
             continue;
         }
-        let mut ctb_color: Option<[f32; 3]> = None;
         let mut screening = 1.0;
         if let Some(ctb) = plot_style {
-            if wire.aci > 0 {
-                ctb_color = ctb.resolve_style_color(wire.aci);
+            if ctb.is_stb || wire.aci > 0 {
                 screening = ctb.resolve_style_screening(wire.aci);
             }
         }
@@ -2124,8 +2146,10 @@ fn emit_searchable_text(
             if matches!(choice, RunFont::Helvetica) && !is_winansi_encodable(&run.text) {
                 continue;
             }
-            let rgb = ctb_color
-                .unwrap_or_else(|| adapt_to_paper([run.color[0], run.color[1], run.color[2]]));
+            let object_rgb = paper_object_rgb(wire.aci, [run.color[0], run.color[1], run.color[2]]);
+            let rgb = plot_style
+                .and_then(|table| table.resolve_object_color(wire.aci, object_rgb))
+                .unwrap_or(object_rgb);
             let [r, g, b] = plotted_color(rgb, run.color[3], screening, options);
             // World mm → page points; the page CTM (plot scale/rotation/clip)
             // applies on top, exactly as for the wire geometry.
@@ -2465,12 +2489,10 @@ fn emit_text(
         let embed = fonts.embeds_all(verts, table, solid_key);
         embedded &= embed;
         // Mirror the wire pass: indexed style color, screening, and pen width.
-        let mut ctb_color: Option<[f32; 3]> = None;
         let mut lw_override: Option<f32> = None;
         let mut screening = 1.0;
         if let Some(ctb) = plot_style {
-            if wire.aci > 0 {
-                ctb_color = ctb.resolve_style_color(wire.aci);
+            if ctb.is_stb || wire.aci > 0 {
                 lw_override = options
                     .object_lineweights
                     .then(|| {
@@ -2495,9 +2517,13 @@ fn emit_text(
             // A CTB colour override wins over the white-sheet adaptation, exactly
             // as in the wire pass — else a monochrome.ctb plot plots the lines
             // black and leaves the text on its screen colour.
-            let rgb = ctb_color.unwrap_or_else(|| {
-                adapt_to_paper([quad[0].color[0], quad[0].color[1], quad[0].color[2]])
-            });
+            let object_rgb = paper_object_rgb(
+                wire.aci,
+                [quad[0].color[0], quad[0].color[1], quad[0].color[2]],
+            );
+            let rgb = plot_style
+                .and_then(|table| table.resolve_object_color(wire.aci, object_rgb))
+                .unwrap_or(object_rgb);
             let [r, g, b] = plotted_color(rgb, a, screening, options);
 
             // Quad corners in world XY; `tl` carries uv = (uv_min.x, uv_min.y)
@@ -3523,9 +3549,18 @@ mod tests {
         .into_iter()
         .collect();
         let text = pdf_stream_text(&render_pdf_bytes(&[page], Some(&named)).unwrap());
-        assert!(text.contains("0 0 1 RG"), "named style Blue applies: {text}");
-        assert!(text.contains("0 1 0 RG"), "unknown style falls back to Normal");
-        assert!(!text.contains("1 0 0 RG"), "no wire keeps its object colour");
+        assert!(
+            text.contains("0 0 1 RG"),
+            "named style Blue applies: {text}"
+        );
+        assert!(
+            text.contains("0 1 0 RG"),
+            "unknown style falls back to Normal"
+        );
+        assert!(
+            !text.contains("1 0 0 RG"),
+            "no wire keeps its object colour"
+        );
     }
 
     #[test]

@@ -37,6 +37,7 @@ fn model(boundary: Vec<[f32; 2]>, families: Vec<PatFamily>) -> HatchModel {
     HatchModel {
         entity: None,
         effective_layer: None,
+        effective_plot_style: None,
         pattern_origin: None,
         render_instance: None,
         // UTM-sized anchor: the rasteriser resolves absolute WCS in f64, so

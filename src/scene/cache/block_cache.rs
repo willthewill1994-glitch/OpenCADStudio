@@ -142,6 +142,7 @@ pub struct LocalWire {
     /// Raw source layer, retained separately from the outer INSERT handle so
     /// expansion can resolve placement-specific display/export attribution.
     pub source_layer: Arc<str>,
+    pub(crate) named_style: crate::io::plot_style::NamedStyleSpec,
     pub hide_unselected: bool,
     /// Set at construction; used to discriminate fill-only GPU batches from
     /// stroke batches in [`StyleKey`]. Derived from
@@ -264,6 +265,8 @@ pub struct NestedRef {
     pub plot_visible: bool,
     pub plot_l0: bool,
     pub source_layer: Arc<str>,
+    pub(crate) named_style: crate::io::plot_style::NamedStyleSpec,
+    pub(crate) layer_named_style: Option<Arc<str>>,
     /// True when this nested INSERT is itself on a locked layer.
     pub layer_locked: bool,
     /// XCLIP boundary for this nested insert, in the parent defn's local frame
@@ -381,6 +384,8 @@ struct ProtoNumericKey {
 
 #[derive(Clone, Copy)]
 struct ProtoKeyRef<'a> {
+    ins_named_style: Option<&'a str>,
+    l0_named_style: Option<&'a str>,
     numeric: ProtoNumericKey,
     /// Layer-0 attribution is placement metadata, not geometry or style.
     inherited_layer: Option<&'a str>,
@@ -390,6 +395,8 @@ struct ProtoKeyRef<'a> {
 
 #[derive(Clone, Debug)]
 struct ProtoKeyOwned {
+    ins_named_style: Option<Arc<str>>,
+    l0_named_style: Option<Arc<str>>,
     numeric: ProtoNumericKey,
     inherited_layer: Option<Arc<str>>,
     ins_complex: Option<Arc<str>>,
@@ -398,7 +405,9 @@ struct ProtoKeyOwned {
 
 impl PartialEq<ProtoKeyRef<'_>> for ProtoKeyOwned {
     fn eq(&self, other: &ProtoKeyRef<'_>) -> bool {
-        self.numeric == other.numeric
+        self.ins_named_style.as_deref() == other.ins_named_style
+            && self.l0_named_style.as_deref() == other.l0_named_style
+            && self.numeric == other.numeric
             && self.inherited_layer.as_deref() == other.inherited_layer
             && self.ins_complex.as_deref() == other.ins_complex
             && self.l0_complex.as_deref() == other.l0_complex
@@ -409,6 +418,8 @@ impl<'a> ProtoKeyRef<'a> {
     fn hash_u64(self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut h = rustc_hash::FxHasher::default();
+        self.ins_named_style.hash(&mut h);
+        self.l0_named_style.hash(&mut h);
         self.numeric.hash(&mut h);
         self.inherited_layer.hash(&mut h);
         self.ins_complex.hash(&mut h);
@@ -418,6 +429,8 @@ impl<'a> ProtoKeyRef<'a> {
 
     fn to_owned_key(self) -> ProtoKeyOwned {
         ProtoKeyOwned {
+            ins_named_style: self.ins_named_style.map(Arc::from),
+            l0_named_style: self.l0_named_style.map(Arc::from),
             numeric: self.numeric,
             inherited_layer: self.inherited_layer.map(Arc::from),
             ins_complex: self.ins_complex.map(Arc::from),
@@ -1564,6 +1577,8 @@ fn build_nested_ref(
         plot_visible,
         plot_l0,
         source_layer: Arc::from(nested_ins.common.layer.as_str()),
+        named_style: crate::io::plot_style::NamedStyleSpec::new(doc, &nested_ins.common),
+        layer_named_style: crate::io::plot_style::layer_named_style(doc, &nested_ins.common.layer),
         layer_locked,
         clip_poly,
         local_rank: depth_map
@@ -1877,6 +1892,7 @@ fn tessellate_sub_local(
                 && (on_l0 || layer_plottable),
             plot_l0: on_l0,
             source_layer: Arc::clone(&source_layer),
+            named_style: crate::io::plot_style::NamedStyleSpec::new(doc, sub.common()),
             hide_unselected: frame_mode == Some(0),
             is_fill_only,
             color_is_byblock: wire_color_is_byblock,
@@ -2153,6 +2169,9 @@ pub(crate) fn expand_insert_with_defn(
     // display stale wipeout geometry or disappear as the view changes.
     // Expand these from their definition until both GPU paths share a
     // verified identical instancing convention.
+    let ins_named_style =
+        crate::io::plot_style::NamedStyleSpec::new(doc, &ins.common).resolve(&None, &None);
+    let l0_named_style = crate::io::plot_style::layer_named_style(doc, &ins.common.layer);
     let can_prototype = cache.prototypes_enabled
         && defn.is_prototype
         && !defn.has_masks
@@ -2180,6 +2199,8 @@ pub(crate) fn expand_insert_with_defn(
             complex_lt_anno,
         );
         let key = ProtoKeyRef {
+            ins_named_style: ins_named_style.as_deref(),
+            l0_named_style: l0_named_style.as_deref(),
             numeric,
             inherited_layer,
             ins_complex: ins_complex.as_ref().map(|lt| lt.name.as_str()),
@@ -2255,6 +2276,8 @@ pub(crate) fn expand_insert_with_defn(
     }
 
     let ctx = ExpandCtx {
+        ins_named_style: ins_named_style.clone(),
+        l0_named_style: l0_named_style.clone(),
         cache,
         ins_color: ins_resolved_color,
         ins_aci,
@@ -2360,6 +2383,8 @@ pub(crate) fn expand_insert_with_defn(
         drop(guard);
         if let Some((hash, numeric)) = proto_lookup {
             let key = ProtoKeyRef {
+                ins_named_style: ctx.ins_named_style.as_deref(),
+                l0_named_style: ctx.l0_named_style.as_deref(),
                 numeric,
                 inherited_layer,
                 ins_complex: ctx.ins_complex.as_ref().map(|lt| lt.name.as_str()),
@@ -2580,6 +2605,8 @@ fn is_standalone_analytical_curve(wire: &WireModel) -> bool {
 }
 
 struct ExpandCtx<'a> {
+    ins_named_style: Option<Arc<str>>,
+    l0_named_style: Option<Arc<str>>,
     cache: &'a BlockCache,
     ins_color: [f32; 4],
     ins_aci: u8,
@@ -2669,6 +2696,8 @@ fn nested_prototype_key(
         ctx.complex_lt_anno,
     );
     NestedPrototypeKey {
+        ins_named_style: ctx.ins_named_style.clone(),
+        l0_named_style: ctx.l0_named_style.clone(),
         block_name: block_name.to_string(),
         linear,
         style,
@@ -2746,6 +2775,7 @@ struct StyleKey {
     /// Keep identical geometry on different effective layers in distinct
     /// batches; a finalized WireModel has only one layer attribution.
     effective_layer: Option<Arc<str>>,
+    effective_plot_style: Option<Arc<str>>,
     color: [u32; 4],
     contrast_bg: Option<[u32; 4]>,
     preserve_color: bool,
@@ -2796,6 +2826,7 @@ struct PointMarkerKey {
 #[derive(Default, Debug)]
 struct BatchEntry {
     effective_layer: Option<Arc<str>>,
+    effective_plot_style: Option<Arc<str>>,
     color: [f32; 4],
     contrast_bg: Option<[f32; 4]>,
     preserve_color: bool,
@@ -2852,6 +2883,8 @@ struct BatchEntry {
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 struct NestedPrototypeKey {
+    ins_named_style: Option<Arc<str>>,
+    l0_named_style: Option<Arc<str>>,
     block_name: String,
     linear: [u64; 9],
     style: Vec<u32>,
@@ -2920,6 +2953,7 @@ impl BatchEntry {
         // itself — the empty `points` field is enough at finalize time.
         Self {
             effective_layer: Some(effective_layer),
+            effective_plot_style: None,
             color,
             contrast_bg,
             preserve_color,
@@ -3042,6 +3076,7 @@ impl Batches {
                     searchable_text: b.searchable_text,
                     name: name.to_string(),
                     effective_layer: b.effective_layer,
+                    effective_plot_style: b.effective_plot_style,
                     points: b.points,
                     points_low: b.points_low,
                     color,
@@ -3094,6 +3129,7 @@ fn style_key(
 ) -> StyleKey {
     StyleKey {
         effective_layer: Some(effective_layer),
+        effective_plot_style: None,
         color: [
             color[0].to_bits(),
             color[1].to_bits(),
@@ -3210,6 +3246,14 @@ fn expand_defn(
                     nref.plot_visible
                 };
                 let inner_ctx = ExpandCtx {
+                    ins_named_style: nref
+                        .named_style
+                        .resolve(&ctx.ins_named_style, &ctx.l0_named_style),
+                    l0_named_style: if nref.plot_l0 {
+                        ctx.l0_named_style.clone()
+                    } else {
+                        nref.layer_named_style.clone()
+                    },
                     cache: ctx.cache,
                     ins_color: nested_style.insert.0,
                     ins_aci: nested_style.insert.4,
@@ -4174,6 +4218,9 @@ fn emit_wire(
     } else {
         Arc::clone(&lw.source_layer)
     };
+    let effective_plot_style = lw
+        .named_style
+        .resolve(&ctx.ins_named_style, &ctx.l0_named_style);
     let final_color = resolve_wire_color(lw, ctx);
     let final_aci = if lw.color_is_byblock {
         ctx.ins_aci
@@ -4338,6 +4385,7 @@ fn emit_wire(
                     text_verts: Vec::new(),
                     name: String::new(),
                     effective_layer: Some(Arc::clone(&effective_layer)),
+                    effective_plot_style: effective_plot_style.clone(),
                     points,
                     points_low,
                     color,
@@ -4474,6 +4522,7 @@ fn emit_wire(
         lw.hide_unselected,
         local_depth,
     );
+    key.effective_plot_style = effective_plot_style.clone();
     key.solid_normal = lw.solid_normal.map(|normal| normal.map(f32::to_bits));
     // Never fold reference-only boundaries into a visible geometry batch.
     key.snap_only = lw.snap_only;
@@ -4525,6 +4574,7 @@ fn emit_wire(
             lw.hide_unselected,
         )
     });
+    entry.effective_plot_style = effective_plot_style;
     entry.local_depth = local_depth;
     entry.solid_normal = lw.solid_normal;
     entry.snap_only = lw.snap_only;

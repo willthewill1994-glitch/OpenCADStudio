@@ -175,103 +175,24 @@ fn session_table_names() -> Vec<String> {
 }
 
 /// The `Normal` object style of a named table, whether by exact or
-/// case-insensitive name; the first entry when there is no `Normal`.
+/// case-insensitive name. Missing Normal means use object properties.
 fn normal_entry(table: &PlotStyleTable) -> Option<&PlotStyleEntry> {
-    table
-        .named_entries
-        .get("Normal")
-        .or_else(|| {
-            table
-                .named_entries
-                .iter()
-                .find(|(name, _)| name.eq_ignore_ascii_case("Normal"))
-                .map(|(_, entry)| entry)
-        })
-        .or_else(|| table.named_entries.values().next())
+    table.named_entries.get("Normal").or_else(|| {
+        table
+            .named_entries
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("Normal"))
+            .map(|(_, entry)| entry)
+    })
 }
 
-// Names in a named table: the packed RGB the codec reads and writes.
-fn packed_rgb([r, g, b]: [u8; 3]) -> i32 {
-    u32::from_be_bytes([0xC2, r, g, b]) as i32
-}
-
-/// Encode a named-style (STB) table as the file bytes the codec reads
-/// back. `PlotStyleTable::to_bytes` writes colour tables, so STB tables
-/// need their own writer.
+/// Encode an STB using the shared codec, including its native 60-byte
+/// container, lengths and checksum. Reject accidental CTB input.
 pub fn encode_stb(table: &PlotStyleTable) -> Result<Vec<u8>, String> {
-    let mut body = String::new();
-    let description = table.description.replace(['\r', '\n'], " ");
-    body.push_str(&format!("description=\"{description}\n"));
-    body.push_str("aci_table_available=TRUE\n");
-    body.push_str(&format!(
-        "scale_factor={}\n",
-        full_real_stb(table.scale_factor)
-    ));
-    body.push_str(&format!(
-        "apply_factor={}\n",
-        if table.apply_factor { "TRUE" } else { "FALSE" }
-    ));
-    body.push_str(&format!(
-        "custom_lineweight_display_units={}\n",
-        table.custom_lineweight_display_units
-    ));
-    body.push_str("plot_style{\n");
-    for (index, (name, entry)) in table.named_entries.iter().enumerate() {
-        let localized_name = if entry.localized_name.is_empty() {
-            name.as_str()
-        } else {
-            entry.localized_name.as_str()
-        };
-        body.push_str(&format!(" {index}{{\n"));
-        body.push_str(&format!("  name=\"{name}\n"));
-        body.push_str(&format!("  localized_name=\"{localized_name}\n"));
-        body.push_str(&format!(
-            "  description=\"{}\n",
-            entry.description.replace(['\r', '\n'], " ")
-        ));
-        let color = entry.color.map(packed_rgb).unwrap_or(-1);
-        body.push_str(&format!("  color={color}\n  mode_color={color}\n"));
-        body.push_str(&format!("  color_policy={}\n", entry.color_policy));
-        body.push_str(&format!(
-            "  physical_pen_number={}\n  virtual_pen_number={}\n",
-            entry.physical_pen_number, entry.virtual_pen_number
-        ));
-        body.push_str(&format!("  screen={}\n", entry.screening));
-        body.push_str(&format!(
-            "  linepattern_size={}\n  linetype={}\n  adaptive_linetype={}\n",
-            entry.linepattern_size,
-            entry.linetype,
-            if entry.adaptive_linetype {
-                "TRUE"
-            } else {
-                "FALSE"
-            }
-        ));
-        body.push_str(&format!("  lineweight={}\n", entry.lineweight));
-        body.push_str(&format!(
-            "  fill_style={}\n  end_style={}\n  join_style={}\n }}\n",
-            entry.fill_style, entry.end_style, entry.join_style
-        ));
+    if !table.is_stb {
+        return Err("Expected a named plot style table (.stb)".into());
     }
-    body.push_str("}\ncustom_lineweight_table{\n");
-    for (index, weight) in table.lineweights.iter().enumerate() {
-        body.push_str(&format!(" {index}={}\n", full_real_stb(*weight)));
-    }
-    body.push_str("}\n");
-    let mut encoder = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
-    use std::io::Write as _;
-    encoder
-        .write_all(body.as_bytes())
-        .map_err(|error| error.to_string())?;
-    encoder.finish().map_err(|error| error.to_string())
-}
-
-fn full_real_stb(value: f32) -> String {
-    let rendered = format!("{value:.10}");
-    rendered
-        .trim_end_matches('0')
-        .trim_end_matches('.')
-        .to_string()
+    table.to_bytes().map_err(|error| error.to_string())
 }
 
 /// A named table (STB) narrowed to one object style: the copy plots every
@@ -283,10 +204,11 @@ pub fn with_object_style(table: &PlotStyleTable, style: &str) -> Option<PlotStyl
     if !table.is_stb {
         return None;
     }
+    let folded_style = style.to_lowercase();
     let entry = table
         .named_entries
         .iter()
-        .find(|(name, _)| name.eq_ignore_ascii_case(style))
+        .find(|(name, _)| name.to_lowercase() == folded_style)
         .map(|(_, entry)| entry.clone())?;
     let mut narrowed = table.clone();
     narrowed.named_entries.clear();
@@ -307,6 +229,11 @@ pub trait PlotStyleTableExt: Sized {
     /// The plotted colour of an object, honouring a named table's `Normal`
     /// object style (STB) as well as a colour table's ACI row (CTB).
     fn resolve_style_color(&self, aci: u8) -> Option<[f32; 3]>;
+    /// Resolve against the actual object RGB, including true-colour objects.
+    fn resolve_object_color(&self, aci: u8, rgb: [f32; 3]) -> Option<[f32; 3]>;
+    /// The selected named entry, or the indexed CTB entry. CTBs do not
+    /// override true-colour objects (ACI 0).
+    fn style_entry(&self, aci: u8) -> Option<&PlotStyleEntry>;
     /// The plotted lineweight in millimetres, or `None` to keep the
     /// object's own lineweight.
     fn resolve_style_lineweight(&self, aci: u8) -> Option<f32>;
@@ -440,27 +367,39 @@ impl PlotStyleTableExt for PlotStyleTable {
         std::fs::write(path, bytes).map_err(|e| e.to_string())
     }
 
-    fn resolve_style_color(&self, aci: u8) -> Option<[f32; 3]> {
-        if !self.is_stb {
-            return self.resolve_color(aci);
+    fn style_entry(&self, aci: u8) -> Option<&PlotStyleEntry> {
+        if self.is_stb {
+            normal_entry(self)
+        } else if aci > 0 {
+            self.aci_entries.get(aci as usize)
+        } else {
+            None
         }
-        let entry = normal_entry(self)?;
-        let mut color = entry
+    }
+
+    fn resolve_object_color(&self, aci: u8, rgb: [f32; 3]) -> Option<[f32; 3]> {
+        let entry = self.style_entry(aci)?;
+        let color = entry
             .color
             .map(|[r, g, b]| [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0]);
         if entry.color_policy & 2 != 0 {
-            let rgb = color.or_else(|| {
-                if aci == 7 {
-                    Some([0.0; 3])
-                } else {
-                    document::types::aci_to_rgb(aci)
-                        .map(|(r, g, b)| [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
-                }
-            })?;
+            let rgb = color.unwrap_or(rgb);
             let gray = 0.299 * rgb[0] + 0.587 * rgb[1] + 0.114 * rgb[2];
-            color = Some([gray; 3]);
+            Some([gray; 3])
+        } else {
+            color
         }
-        color
+    }
+
+    fn resolve_style_color(&self, aci: u8) -> Option<[f32; 3]> {
+        let rgb = if aci == 7 {
+            [0.0; 3]
+        } else {
+            document::types::aci_to_rgb(aci)
+                .map(|(r, g, b)| [r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0])
+                .unwrap_or([0.0; 3])
+        };
+        self.resolve_object_color(aci, rgb)
     }
 
     fn resolve_style_lineweight(&self, aci: u8) -> Option<f32> {
@@ -679,4 +618,72 @@ mod lenient_loading_tests {
         assert_eq!(preserved.aci_entries[1].lineweight, 13);
         std::fs::remove_dir_all(dir).unwrap();
     }
+}
+
+/// Cached named-style inheritance, independent of object colour.
+#[derive(Clone, Debug)]
+pub(crate) struct NamedStyleSpec {
+    own: Option<Arc<str>>,
+    by_block: bool,
+    layer_zero: bool,
+}
+
+pub(crate) fn layer_named_style(doc: &document::Document, layer: &str) -> Option<Arc<str>> {
+    if doc.header.plotstyle_mode {
+        return None;
+    }
+    let handle = doc.layers.get(layer).map(|layer| layer.plotstyle_handle);
+    let name = crate::app::properties::plot_style_name(doc, 3, handle);
+    Some(Arc::from(if name == "ByLayer" { "Normal" } else { &name }))
+}
+
+impl NamedStyleSpec {
+    pub(crate) fn new(doc: &document::Document, common: &document::entities::EntityCommon) -> Self {
+        let own = if doc.header.plotstyle_mode {
+            None
+        } else if common.plotstyle_flags == 0 {
+            layer_named_style(doc, &common.layer)
+        } else {
+            let name = crate::app::properties::plot_style_name(
+                doc,
+                common.plotstyle_flags,
+                common.plotstyle_handle,
+            );
+            Some(Arc::from(
+                if matches!(name.as_str(), "ByLayer" | "ByBlock") {
+                    "Normal"
+                } else {
+                    &name
+                },
+            ))
+        };
+        Self {
+            own,
+            by_block: common.plotstyle_flags == 1,
+            layer_zero: common.plotstyle_flags == 0
+                && crate::scene::view::render::is_effective_layer_zero(&common.layer),
+        }
+    }
+    pub(crate) fn resolve(
+        &self,
+        parent: &Option<Arc<str>>,
+        layer: &Option<Arc<str>>,
+    ) -> Option<Arc<str>> {
+        if self.by_block {
+            parent.clone().or_else(|| self.own.clone())
+        } else if self.layer_zero {
+            layer.clone().or_else(|| self.own.clone())
+        } else {
+            self.own.clone()
+        }
+    }
+}
+
+/// Resolve a top-level entity's named plot style. Expanded geometry carries
+/// its occurrence-specific style instead (ByBlock and layer-0 inheritance).
+pub fn resolve_entity_plot_style(
+    doc: &document::Document,
+    common: &document::entities::EntityCommon,
+) -> Option<Arc<str>> {
+    NamedStyleSpec::new(doc, common).resolve(&None, &None)
 }

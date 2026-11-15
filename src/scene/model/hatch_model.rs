@@ -217,6 +217,8 @@ pub struct HatchModel {
     /// placement-specific because one block definition can be inserted on many
     /// layers; `None` retains the entity-handle fallback for direct hatches.
     pub effective_layer: Option<std::sync::Arc<str>>,
+    /// Resolved named plot style for this occurrence, before cache batching.
+    pub effective_plot_style: Option<std::sync::Arc<str>>,
     /// Recorded hatch origin in its fill plane, independent of intrinsic PAT line bases.
     pub pattern_origin: Option<[f64; 2]>,
     pub render_instance: Option<super::instance_model::RenderInstance>,

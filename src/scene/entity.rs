@@ -2550,6 +2550,8 @@ impl Scene {
                     return;
                 };
                 model.entity = Some(source_hatch.common.handle);
+                model.effective_plot_style =
+                    context.named_plot_style(document, &source_hatch.common);
                 model.effective_layer = Some(std::sync::Arc::from(
                     context.effective_layer(&source_hatch.common.layer),
                 ));
@@ -2573,11 +2575,8 @@ impl Scene {
                 model.draw_depth =
                     context.draw_depth(source_hatch.common.handle, depth_map.as_ref());
                 for clip in &context.clips {
-                    let clipped = pick::xclip::clip_hatch_boundary(
-                        &model.boundary,
-                        model.world_origin,
-                        clip,
-                    );
+                    let clipped =
+                        pick::xclip::clip_hatch_boundary(&model.boundary, model.world_origin, clip);
                     if clipped.is_empty() {
                         return;
                     }
@@ -2816,6 +2815,7 @@ impl Scene {
                     effective_layer: Some(std::sync::Arc::from(
                         context.effective_layer(&source.common.layer),
                     )),
+                    effective_plot_style: None,
                     pattern_origin: None,
                     render_instance,
                     boundary: Arc::new(boundary),
@@ -3342,6 +3342,7 @@ impl Scene {
         Some(HatchModel {
             entity: None,
             effective_layer: None,
+            effective_plot_style: None,
             pattern_origin: Some([dxf.pattern_origin().x, dxf.pattern_origin().y]),
             render_instance: None,
             boundary: std::sync::Arc::new(boundary_f32),
@@ -3758,6 +3759,7 @@ impl Scene {
         HatchModel {
             entity: None,
             effective_layer: None,
+            effective_plot_style: None,
             pattern_origin: None,
             render_instance: None,
             boundary: std::sync::Arc::new(boundary),

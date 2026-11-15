@@ -86,3 +86,11 @@ mod zoom_extents_coverage;
 
 #[path = "zoom_extents_xline.rs"]
 mod zoom_extents_xline;
+
+#[path = "stb_named_blocks.rs"]
+mod stb_named_blocks;
+
+#[path = "stb_native_codec.rs"]
+mod stb_native_codec;
+#[path = "stb_dwg_pdf.rs"]
+mod stb_dwg_pdf;

@@ -3769,6 +3769,7 @@ impl Scene {
                 hatches.push(HatchModel {
                     entity: None,
                     effective_layer: wire.effective_layer.clone(),
+                    effective_plot_style: wire.effective_plot_style.clone(),
                     pattern_origin: None,
                     render_instance: wire.render_instance,
                     world_origin: [0.0, 0.0],

@@ -6945,6 +6945,7 @@ impl Scene {
         Some(HatchModel {
             entity: None,
             effective_layer: None,
+            effective_plot_style: None,
             pattern_origin: None,
             render_instance: None,
             world_origin: [0.0, 0.0],

@@ -1,0 +1,39 @@
+description="Synthetic named pens — OpenCADStudio regression fixture
+aci_table_available=FALSE
+scale_factor=1
+apply_factor=FALSE
+custom_lineweight_display_units=0
+plot_style{
+ 0{
+  name="Normal
+  color=-1
+  color_policy=0
+  screen=100
+  lineweight=0
+  end_style=4
+  join_style=5
+  fill_style=73
+ }
+ 1{
+  name="Bleu épais
+  localized_name="Bleu épais
+  color=-1040187137
+  color_policy=0
+  screen=100
+  lineweight=13
+  end_style=0
+  join_style=0
+  fill_style=73
+ }
+ 2{
+  name="Gris 50
+  color=-1
+  color_policy=2
+  screen=50
+  lineweight=0
+ }
+}
+custom_lineweight_table{
+ 0=0
+ 13=0.5
+}

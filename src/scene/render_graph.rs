@@ -268,6 +268,28 @@ impl InstanceContext {
             .to_string()
     }
 
+    /// Named styles follow the same INSERT path as colour and layer inheritance.
+    pub fn named_plot_style(
+        &self,
+        doc: &Document,
+        common: &document::entities::EntityCommon,
+    ) -> Option<std::sync::Arc<str>> {
+        use crate::io::plot_style::{layer_named_style, NamedStyleSpec};
+        if doc.header.plotstyle_mode {
+            return None;
+        }
+        let mut parent = None;
+        let mut layer = None;
+        for insert in &self.insert_path {
+            let next = NamedStyleSpec::new(doc, &insert.common).resolve(&parent, &layer);
+            if layer.is_none() || !is_effective_layer_zero(&insert.common.layer) {
+                layer = layer_named_style(doc, &insert.common.layer);
+            }
+            parent = next;
+        }
+        NamedStyleSpec::new(doc, common).resolve(&parent, &layer)
+    }
+
     pub fn style_for(&self, document: &Document, entity: &EntityType) -> ResolvedStyle {
         if self
             .insert_path

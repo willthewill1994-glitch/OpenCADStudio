@@ -1384,6 +1384,7 @@ impl HatchCommand {
             return HatchModel {
                 entity: None,
                 effective_layer: None,
+                effective_plot_style: None,
                 pattern_origin: source.pattern_origin,
                 render_instance: None,
                 boundary: std::sync::Arc::new(rel),
@@ -1439,6 +1440,7 @@ impl HatchCommand {
         HatchModel {
             entity: None,
             effective_layer: None,
+            effective_plot_style: None,
             pattern_origin: Some(self.default_origin),
             render_instance: None,
             boundary: std::sync::Arc::new(rel),

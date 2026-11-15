@@ -302,6 +302,7 @@ fn app_created_hatch_roundtrips_catalog_spacing() {
     let model = HatchModel {
         entity: None,
         effective_layer: None,
+            effective_plot_style: None,
         pattern_origin: None,
         render_instance: None,
         world_origin: [0.0, 0.0],
@@ -365,6 +366,7 @@ fn nested_hatch_serializes_only_outer_as_external() {
     let model = HatchModel {
         entity: None,
         effective_layer: None,
+            effective_plot_style: None,
         pattern_origin: None,
         render_instance: None,
         world_origin: [0.0, 0.0],

@@ -71,6 +71,7 @@ fn thousand_wipeouts_share_bind_groups() {
         .map(|index| HatchModel {
             entity: None,
             effective_layer: None,
+            effective_plot_style: None,
             pattern_origin: None,
             render_instance: None,
             world_origin: [index as f64 * 2.0, 0.0],

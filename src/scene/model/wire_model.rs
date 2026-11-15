@@ -714,6 +714,8 @@ pub struct WireModel {
     /// keep their own nonzero layer or inherit the nearest nonzero INSERT layer;
     /// `None` retains the handle-based fallback for direct and synthetic wires.
     pub effective_layer: Option<std::sync::Arc<str>>,
+    /// Resolved named plot style for this occurrence, before cache batching.
+    pub effective_plot_style: Option<std::sync::Arc<str>>,
     /// Ordered world-space positions forming a strip of quads. Each entry is
     /// the "high" half of a double-single f32 pair; [`points_low`] carries the
     /// matching residual so the shader can reconstruct the f64 source.
@@ -889,6 +891,7 @@ impl WireModel {
         Self {
             name: name.to_string(),
             effective_layer: self.effective_layer.clone(),
+            effective_plot_style: self.effective_plot_style.clone(),
             points: self.points.clone(),
             points_low: self.points_low.clone(),
             point_marker: self.point_marker,
@@ -1007,6 +1010,7 @@ impl WireModel {
             searchable_text: Vec::new(),
             name,
             effective_layer: None,
+            effective_plot_style: None,
             points,
             points_low: Vec::new(),
             color,
@@ -1546,6 +1550,7 @@ impl Default for WireModel {
             searchable_text: Vec::new(),
             name: String::new(),
             effective_layer: None,
+            effective_plot_style: None,
             points: Vec::new(),
             points_low: Vec::new(),
             color: Self::WHITE,
