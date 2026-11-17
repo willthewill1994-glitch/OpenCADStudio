@@ -15,10 +15,12 @@ concurrency:
 jobs:
   windows-x64:
     runs-on: windows-latest
-    timeout-minutes: 90
+    timeout-minutes: 180
     env:
       CARGO_INCREMENTAL: "0"
-      CARGO_BUILD_JOBS: "1"
+      CARGO_BUILD_JOBS: "2"
+      CARGO_PROFILE_RELEASE_OPT_LEVEL: "1"
+      CARGO_PROFILE_RELEASE_CODEGEN_UNITS: "64"
     steps:
       - name: Checkout corrected source
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -48,11 +50,14 @@ jobs:
           cargo test --locked --release --target x86_64-pc-windows-msvc --test integration stb_
           if ($LASTEXITCODE -ne 0) { throw "STB regression tests failed" }
 
-      - name: Build portable executable
+      # Cargo builds application binaries for integration tests. Reuse that
+      # executable: a separate cargo build changes the dev-dependency feature
+      # graph and needlessly recompiles the application a second time.
+      - name: Verify portable executable from integration build
         shell: pwsh
         run: |
-          cargo build --locked --release --target x86_64-pc-windows-msvc --bin OpenCADStudio
-          if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
+          $path = "target/x86_64-pc-windows-msvc/release/OpenCADStudio.exe"
+          if (-not (Test-Path $path)) { throw "Integration build did not produce the application executable" }
           $exe = (Resolve-Path target/x86_64-pc-windows-msvc/release/OpenCADStudio.exe).Path
           $process = Start-Process -FilePath $exe -ArgumentList "--help" -Wait -PassThru
           if ($process.ExitCode -ne 0) { throw "Executable startup check failed" }
@@ -69,6 +74,7 @@ jobs:
           OpenCADStudio STB preview — Windows x64 (Intel/AMD)
           Commit: $commit
           Portable experimental build; not an official release or signed installer.
+          Preview optimization level: 1 (the official release defaults to 3).
           Native STB regression tests and the --help startup check passed on Windows.
           Interactive GUI and printer behaviour have not been certified by this workflow.
           Known limits: see STB-technical-notes.md.

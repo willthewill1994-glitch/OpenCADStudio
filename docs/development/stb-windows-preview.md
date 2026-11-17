@@ -31,3 +31,19 @@ started. The workflow has only been checked locally for YAML structure and
 expected build/test/package steps. There is no Windows executable to download
 yet. An authorized GitHub connection and a destination repository are needed
 before pushing the branch and obtaining the downloadable build artifact.
+
+## First Windows run and packaging correction
+
+Run `44179877664` successfully compiled and passed all six STB tests on
+Windows (78m 28s for the first release/test build). The following standalone
+`cargo build` unnecessarily recompiled the app with a different dependency
+feature graph; the 90-minute job timeout cancelled it before ZIP publication.
+No downloadable package was produced by that run.
+
+The workflow now reuses the application executable Cargo already builds for
+integration tests and checks its startup directly. Absence of that executable
+fails packaging explicitly. The preview uses optimization level 1 and 64
+codegen units with two jobs to reduce compilation time; no STB source or test
+assertions have changed. The timeout is 180 minutes to leave enough margin
+for the initial Windows build. This is a preview configuration, not the
+project's default optimization-level-3 official release configuration.
