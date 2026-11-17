@@ -1,0 +1,88 @@
+name: STB Windows portable preview
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [feat/native-stb-plot-styles]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: stb-windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  windows-x64:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    env:
+      CARGO_INCREMENTAL: "0"
+      CARGO_BUILD_JOBS: "1"
+    steps:
+      - name: Checkout corrected source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+          targets: x86_64-pc-windows-msvc
+
+      - name: Cache dependencies
+        uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          shared-key: stb-windows-x64-release
+
+      - name: Build application icon
+        shell: pwsh
+        run: |
+          magick assets/logo.svg -define icon:auto-resize=16,24,32,48,64,128,256 packaging/windows/AppIcon.ico
+          if ($LASTEXITCODE -ne 0) { throw "Icon conversion failed" }
+
+      - name: Test native STB support on Windows
+        shell: pwsh
+        run: |
+          cargo test --locked --release --target x86_64-pc-windows-msvc --test integration stb_
+          if ($LASTEXITCODE -ne 0) { throw "STB regression tests failed" }
+
+      - name: Build portable executable
+        shell: pwsh
+        run: |
+          cargo build --locked --release --target x86_64-pc-windows-msvc --bin OpenCADStudio
+          if ($LASTEXITCODE -ne 0) { throw "Windows build failed" }
+          $exe = (Resolve-Path target/x86_64-pc-windows-msvc/release/OpenCADStudio.exe).Path
+          $process = Start-Process -FilePath $exe -ArgumentList "--help" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Executable startup check failed" }
+
+      - name: Package executable and corresponding source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
+          Copy-Item target/x86_64-pc-windows-msvc/release/OpenCADStudio.exe dist/OpenCADStudio-STB-Windows-x64.exe
+          Copy-Item LICENSE dist/LICENSE.txt
+          Copy-Item docs/development/named-plot-styles.md dist/STB-technical-notes.md
+          $commit = git rev-parse HEAD
+          @"
+          OpenCADStudio STB preview — Windows x64 (Intel/AMD)
+          Commit: $commit
+          Portable experimental build; not an official release or signed installer.
+          Native STB regression tests and the --help startup check passed on Windows.
+          Interactive GUI and printer behaviour have not been certified by this workflow.
+          Known limits: see STB-technical-notes.md.
+          Corresponding application source: OpenCADStudio-STB-source.zip.
+          "@ | Set-Content -Encoding utf8 dist/BUILD.txt
+          git archive --format=zip --output=dist/OpenCADStudio-STB-source.zip HEAD
+          if ($LASTEXITCODE -ne 0) { throw "Source archive creation failed" }
+          Get-FileHash dist/OpenCADStudio-STB-Windows-x64.exe -Algorithm SHA256 |
+            Format-List | Out-String | Set-Content -Encoding utf8 dist/SHA256.txt
+
+      - name: Provide downloadable Windows package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: OpenCADStudio-STB-Windows11-x64-unsigned
+          path: dist/
+          if-no-files-found: error
+          retention-days: 14
